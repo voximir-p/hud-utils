@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "hud-utils",
+  "version": "${version}",
+  "name": "HUD Utils",
+  "description": "A mod that adds some useful information to the HUD.",
+  "authors": [
+    "Voximir"
+  ],
+  "contact": {
+    "homepage": "https://modrinth.com/mod/hud-utils",
+    "sources": "https://github.com/voximir-p/hud-utils"
+  },
+  "license": "MIT",
+  "icon": "assets/hud-utils/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "main": [
+      "org.voximir.hud_utils.HudUtils"
+    ],
+    "modmenu": [
+      "org.voximir.hud_utils.config.ModMenuIntegration"
+    ]
+  },
+  "depends": {
+    "fabricloader": "${loader_version_range}",
+    "minecraft": "${minecraft_version_range}",
+    "java": "${java_version_range}",
+    "fabric-api": "*",
+    "yet_another_config_lib_v3": "${yacl_version_range}"
+  }
+}
