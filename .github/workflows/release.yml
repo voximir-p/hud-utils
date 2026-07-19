@@ -48,12 +48,21 @@ jobs:
 
       - name: Read project information
         id: project
+        shell: bash
         run: |
           TAG="${{ steps.resolve_tag.outputs.tag }}"
 
-          echo "version=${TAG%%+*}" >> "$GITHUB_OUTPUT"
-          echo "mod_id=$(grep '^mod.id=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
-          echo "mod_version=$(grep '^mod.version=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          VERSION="${TAG%%+*}"
+          MOD_ID=$(grep '^mod\.id[[:space:]]*=' gradle.properties | cut -d= -f2 | xargs)
+
+          echo "Resolved values:"
+          echo "  TAG=$TAG"
+          echo "  VERSION=$VERSION"
+          echo "  MOD_ID=$MOD_ID"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "mod_id=$MOD_ID" >> "$GITHUB_OUTPUT"
+          echo "mod_version=$VERSION" >> "$GITHUB_OUTPUT"
 
   build:
     needs: build-setup
