@@ -1,30 +1,251 @@
-# Automatically build the project and run any configured tests for every push
-# and submitted pull request. This can help catch issues that only occur on
-# certain platforms or Java versions, and provides a first line of defence
-# against bad commits.
+name: Build and Release
 
-name: build
-on: [pull_request, push]
+on:
+  push:
+    tags:
+      - '*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build and release (e.g. 0.1.0+mc26.2)
+        required: true
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04
+  build-setup:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve_tag.outputs.tag }}
+      version: ${{ steps.project.outputs.version }}
+      mod_id: ${{ steps.project.outputs.mod_id }}
+      mod_version: ${{ steps.project.outputs.mod_version }}
+
     steps:
-      - name: checkout repository
-        uses: actions/checkout@v6
-      - name: validate gradle wrapper
-        uses: gradle/actions/wrapper-validation@v6
-      - name: setup jdk
-        uses: actions/setup-java@v5
+      - name: Resolve tag
+        id: resolve_tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout tag
+        uses: actions/checkout@v4
         with:
-          java-version: '25'
-          distribution: 'microsoft'
-      - name: make gradle wrapper executable
-        run: chmod +x ./gradlew
-      - name: build
+          ref: ${{ steps.resolve_tag.outputs.tag }}
+          fetch-depth: 1
+
+      - name: Validate tag exists
+        run: |
+          TAG="${{ steps.resolve_tag.outputs.tag }}"
+
+          if ! git rev-parse "$TAG^{tag}" >/dev/null 2>&1 && \
+             ! git rev-parse "$TAG^{commit}" >/dev/null 2>&1; then
+            echo "::error::Tag '$TAG' does not exist."
+            exit 1
+          fi
+
+      - name: Read project information
+        id: project
+        run: |
+          TAG="${{ steps.resolve_tag.outputs.tag }}"
+
+          echo "version=${TAG%%+*}" >> "$GITHUB_OUTPUT"
+          echo "mod_id=$(grep '^mod_id=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          echo "mod_version=$(grep '^mod_version=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: build-setup
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-setup.outputs.tag }}
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build mod
         run: ./gradlew build
-      - name: capture build artifacts
-        uses: actions/upload-artifact@v7
+
+      - name: Rename jar and generate SHA256
+        run: |
+          MOD_ID="${{ needs.build-setup.outputs.mod_id }}"
+          TAG="${{ needs.build-setup.outputs.tag }}"
+          MOD_VERSION="${{ needs.build-setup.outputs.mod_version }}"
+
+          JAR=$(find build/libs \
+            -maxdepth 1 \
+            -type f \
+            -name "${MOD_ID}-*.jar" \
+            ! -name "*-sources.jar" \
+            ! -name "*-javadoc.jar" \
+            | head -n1)
+
+          if [ -z "$JAR" ]; then
+            echo "::error::Built jar not found."
+            exit 1
+          fi
+
+          mv "$JAR" "build/libs/${MOD_ID}-${TAG}.jar"
+
+          cd build/libs
+          sha256sum -b "${MOD_ID}-${TAG}.jar" > "${MOD_ID}-${TAG}.jar.sha256"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: Artifacts
-          path: build/libs/
+          name: build-artifacts
+          path: |
+            build/libs/${{ needs.build-setup.outputs.mod_id }}-${{ needs.build-setup.outputs.tag }}.jar
+            build/libs/${{ needs.build-setup.outputs.mod_id }}-${{ needs.build-setup.outputs.tag }}.jar.sha256
+
+  release-setup:
+    needs:
+      - build-setup
+      - build
+    runs-on: ubuntu-latest
+
+    outputs:
+      body: ${{ steps.changelog.outputs.body }}
+      prerelease: ${{ steps.changelog.outputs.prerelease }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-setup.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Get latest CHANGELOG.md
+        run: |
+          TAG="${{ needs.build-setup.outputs.tag }}"
+
+          BRANCH=$(git for-each-ref \
+            --format='%(refname:short)' \
+            refs/remotes/origin \
+            --contains "$TAG" \
+            | grep -v '^origin/HEAD$' \
+            | head -n1 \
+            | sed 's|^origin/||')
+
+          if [ -z "$BRANCH" ]; then
+            echo "::error::Could not determine branch containing $TAG"
+            exit 1
+          fi
+
+          echo "Using CHANGELOG.md from $BRANCH"
+
+          git show "origin/$BRANCH:CHANGELOG.md" > CHANGELOG.md
+
+      - name: Parse changelog
+        id: changelog
+        shell: bash
+        run: |
+          VERSION="${{ needs.build-setup.outputs.version }}"
+          TAG="${{ needs.build-setup.outputs.tag }}"
+
+          BODY=$(awk "
+            /^## \[$VERSION\]/ {found=1; next}
+            found && /^## \[/ {exit}
+            found && /^\[.*\]:/ {exit}
+            found {print}
+          " CHANGELOG.md)
+
+          BODY=$(printf "%s\n" "$BODY" | sed '/./,$!d')
+
+          if [[ "$TAG" =~ -(alpha|beta|rc) ]] || [[ "$TAG" == *-* ]]; then
+            PRERELEASE=true
+          else
+            PRERELEASE=false
+          fi
+
+          if [ -z "$BODY" ]; then
+            echo "::warning::Version $VERSION not found. Using [Unreleased]."
+
+            BODY=$(awk '
+              /^## \[Unreleased\]/ {found=1; next}
+              found && /^## \[/ {exit}
+              found && /^\[.*\]:/ {exit}
+              found {print}
+            ' CHANGELOG.md)
+
+            BODY=$(printf "%s\n" "$BODY" | sed '/./,$!d')
+          fi
+
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "body<<EOF"
+            echo "## Release Notes"
+            echo
+            echo "$BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  release:
+    needs:
+      - build-setup
+      - build
+      - release-setup
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build-setup.outputs.tag }}
+          name: ${{ needs.build-setup.outputs.tag }}
+          body: ${{ needs.release-setup.outputs.body }}
+          prerelease: ${{ needs.release-setup.outputs.prerelease == 'true' }}
+          files: |
+            artifacts/${{ needs.build-setup.outputs.mod_id }}-${{ needs.build-setup.outputs.tag }}.jar
+            artifacts/${{ needs.build-setup.outputs.mod_id }}-${{ needs.build-setup.outputs.tag }}.jar.sha256
+
+  post:
+    needs:
+      - build-setup
+      - release
+
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Summary
+        run: |
+          TAG="${{ needs.build-setup.outputs.tag }}"
+
+          if [ "${{ needs.release.result }}" = "success" ]; then
+            {
+              echo "### ✅ Release successful"
+              echo
+              echo "**Tag:** \`$TAG\`"
+              echo "**Release:** https://github.com/${{ github.repository }}/releases/tag/$TAG"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### ❌ Release failed"
+              echo
+              echo "**Tag:** \`$TAG\`"
+              echo "Check the workflow logs for details."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
