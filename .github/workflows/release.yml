@@ -52,8 +52,8 @@ jobs:
           TAG="${{ steps.resolve_tag.outputs.tag }}"
 
           echo "version=${TAG%%+*}" >> "$GITHUB_OUTPUT"
-          echo "mod_id=$(grep '^mod_id=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
-          echo "mod_version=$(grep '^mod_version=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          echo "mod_id=$(grep '^mod.id=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          echo "mod_version=$(grep '^mod.version=' gradle.properties | cut -d= -f2)" >> "$GITHUB_OUTPUT"
 
   build:
     needs: build-setup
