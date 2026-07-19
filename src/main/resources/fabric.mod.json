@@ -15,7 +15,7 @@
   "icon": "assets/hud-utils/icon.png",
   "environment": "client",
   "entrypoints": {
-    "main": [
+    "client": [
       "org.voximir.hud_utils.HudUtils"
     ],
     "modmenu": [

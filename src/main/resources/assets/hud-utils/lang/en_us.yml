@@ -1,0 +1,28 @@
+config.hud_utils:
+  title: HUD Utils
+  category:
+    general:
+      .: General
+      show_hud:
+        .: Show HUD
+        description: Whether to show the HUD on the screen.
+      display:
+        .: Display
+        display_coordinates:
+          .: Display Coordinates
+          description: Whether to display coordinates in the HUD.
+        display_days:
+          .: Display Days
+          description: Whether to display the number of days in the HUD.
+        display_time:
+          .: Display Time
+          description: Whether to display the time in the HUD.
+        use_24_hour:
+          .: Use 24 Hour Format
+          description: Whether to use 24 hour format for the time display.
+
+key.category.hud_utils:
+  hud_utils: HUD Utils
+key.hud_utils:
+  toggle: Toggle HUD
+  settings: HUD Utils Settings
